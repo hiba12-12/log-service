@@ -1,0 +1,16 @@
+{
+  "logs": [
+    {
+      "timestamp": "2026-08-11T10:00:00Z",
+      "level": "error",
+      "service": "checkout",
+      "message": "ok entry"
+    },
+    {
+      "timestamp": "2026-08-11T10:00:00Z",
+      "level": "critical",
+      "service": "checkout",
+      "message": "bad level"
+    }
+  ]
+}

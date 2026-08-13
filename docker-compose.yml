@@ -1,0 +1,61 @@
+services:
+  app:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      DATABASE_URL: postgres://loguser:logpass@db:5432/logs
+      RETENTION_DAYS: "30"
+      RETENTION_INTERVAL_MS: "3600000"
+      WRITE_BUFFER_INTERVAL_MS: "50"
+      WRITE_BUFFER_MAX_SIZE: "10000"
+    depends_on:
+      db:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: loguser
+      POSTGRES_PASSWORD: logpass
+      POSTGRES_DB: logs
+    command:
+      - "postgres"
+      - "-c"
+      - "work_mem=32MB"
+      - "-c"
+      - "shared_buffers=256MB"
+      - "-c"
+      - "maintenance_work_mem=64MB"
+      - "-c"
+      - "effective_cache_size=768MB"
+      - "-c"
+      - "synchronous_commit=off"
+      - "-c"
+      - "max_wal_size=2GB"
+      - "-c"
+      - "gin_pending_list_limit=16MB"
+      - "-c"
+      - "checkpoint_completion_target=0.9"
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U loguser -d logs"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+
+volumes:
+  pgdata:
