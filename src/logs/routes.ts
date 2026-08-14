@@ -1,7 +1,7 @@
 import { FastifyInstance } from 'fastify';
 import { validateLogEntry } from './validation';
 //import { insertLogs } from './repository';
-import { enqueueLogs } from './write-buffer';
+import { enqueueLogs, BackpressureError } from './write-buffer';
 import { ValidLogEntry, RejectedEntry } from './types';
 
 interface IngestRequestBody {
@@ -45,7 +45,18 @@ export async function logsIngestRoutes(app: FastifyInstance) {
       });
     }
 
-    await enqueueLogs(validEntries);
+    try {
+      await enqueueLogs(validEntries);
+    } catch (err) {
+      if (err instanceof BackpressureError) {
+       
+        return reply
+          .code(503)
+          .header('Retry-After', '1')
+          .send({ error: 'server is under heavy load, please retry shortly' });
+      }
+      throw err;
+    }
 
     return reply.code(200).send({
       accepted: validEntries.length,
