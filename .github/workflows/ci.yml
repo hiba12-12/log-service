@@ -1,0 +1,98 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: loguser
+          POSTGRES_PASSWORD: logpass
+          POSTGRES_DB: logs
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U loguser -d logs"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgres://loguser:logpass@localhost:5432/logs
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type check (build)
+        run: npm run build
+
+      - name: Run database migrations
+        run: npm run migrate:up
+
+      - name: Start server in background
+        run: npm run start &
+        
+      - name: Wait for server to be healthy
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8080/health; then
+              echo "Server is healthy"
+              exit 0
+            fi
+            echo "Waiting for server... ($i)"
+            sleep 1
+          done
+          echo "Server did not become healthy in time"
+          exit 1
+
+      - name: Smoke test - POST /logs (valid + invalid entries)
+        run: |
+          RESPONSE=$(curl -s -X POST http://localhost:8080/logs \
+            -H "Content-Type: application/json" \
+            -d '{"logs":[{"timestamp":"2026-08-11T10:00:00Z","level":"error","service":"ci-test","message":"smoke test entry"},{"timestamp":"2026-08-11T10:00:00Z","level":"invalid","service":"ci-test","message":"bad level"}]}')
+          echo "Response: $RESPONSE"
+          echo "$RESPONSE" | grep -q '"accepted":1' || (echo "Expected 1 accepted entry" && exit 1)
+          echo "$RESPONSE" | grep -q '"rejected"' || (echo "Expected rejected array" && exit 1)
+
+      - name: Smoke test - GET /logs
+        run: |
+          RESPONSE=$(curl -sf "http://localhost:8080/logs?service=ci-test")
+          echo "Response: $RESPONSE"
+          echo "$RESPONSE" | grep -q '"logs"' || (echo "Expected logs array in response" && exit 1)
+
+      - name: Smoke test - GET /logs/aggregate
+        run: |
+          SINCE=$(date -u -d '1 hour ago' +%Y-%m-%dT%H:%M:%SZ)
+          UNTIL=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          RESPONSE=$(curl -sf "http://localhost:8080/logs/aggregate?since=${SINCE}&until=${UNTIL}&bucket=1m")
+          echo "Response: $RESPONSE"
+          echo "$RESPONSE" | grep -q '"buckets"' || (echo "Expected buckets array in response" && exit 1)
+
+      - name: Smoke test - invalid query params return 400
+        run: |
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:8080/logs?level=critical")
+          if [ "$STATUS" != "400" ]; then
+            echo "Expected 400 for invalid level, got $STATUS"
+            exit 1
+          fi
+
+      - name: Build Docker image
+        run: docker build -t log-service:ci .
