@@ -20,14 +20,17 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "csv-stringify": "^6.8.3",
     "dotenv": "^17.4.2",
     "fastify": "^5.11.3",
     "node-pg-migrate": "^9.0.0",
-    "pg": "^8.23.0"
+    "pg": "^8.23.0",
+    "pg-copy-streams": "^7.0.0"
   },
   "devDependencies": {
     "@types/node": "^26.2.0",
     "@types/pg": "^8.21.0",
+    "@types/pg-copy-streams": "^1.2.5",
     "tsx": "^4.23.12",
     "typescript": "^5.6.3"
   }
