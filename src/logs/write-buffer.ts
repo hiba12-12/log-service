@@ -1,4 +1,5 @@
-import { insertLogs } from './repository';
+import { pool } from '../db';
+import { insertLogsWithClient, upsertRollup } from './repository';
 import { ValidLogEntry } from './types';
 
 interface PendingFlush {
@@ -62,14 +63,19 @@ async function flush() {
   queue = [];
   waiters = [];
 
+  const client = await pool.connect();
   try {
-    await insertLogs(batch);
+    await client.query('BEGIN');
+    await insertLogsWithClient(client, batch);
+    await upsertRollup(client, batch);
+    await client.query('COMMIT');
     currentWaiters.forEach((w) => w.resolve());
   } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
     currentWaiters.forEach((w) => w.reject(err));
   } finally {
+    client.release();
     isFlushing = false;
-    
     if (queue.length > 0) {
       triggerFlush();
     }

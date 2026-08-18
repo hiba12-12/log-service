@@ -110,6 +110,73 @@ export function parseAggregateQueryParams(raw: AggregateQueryParams): ParseResul
 }
 
 export async function queryAggregate(parsed: ParsedAggregateQuery): Promise<AggregateResult> {
+  const hasRawOnlyFilters = Boolean(parsed.q) || Object.keys(parsed.attrFilters).length > 0;
+
+  if (hasRawOnlyFilters) {
+    return queryAggregateRaw(parsed);
+  }
+
+  return queryAggregateFromRollup(parsed);
+}
+
+async function queryAggregateFromRollup(parsed: ParsedAggregateQuery): Promise<AggregateResult> {
+  const conditions: string[] = [];
+  const values: unknown[] = [];
+
+  function addCondition(sql: string, value: unknown) {
+    values.push(value);
+    conditions.push(sql.replace('?', `$${values.length}`));
+  }
+
+  addCondition('bucket_start >= ?', parsed.since.toISOString());
+  addCondition('bucket_start < ?', parsed.until.toISOString());
+
+  if (parsed.service) {
+    addCondition('service = ?', parsed.service);
+  }
+  if (parsed.level) {
+    addCondition('level = ?', parsed.level);
+  }
+
+  const whereClause = `WHERE ${conditions.join(' AND ')}`;
+
+  values.push(parsed.bucketSeconds);
+  const bucketSecParam = `$${values.length}`;
+
+  const bucketExpr = `to_timestamp(floor(extract(epoch from bucket_start) / ${bucketSecParam}) * ${bucketSecParam})`;
+
+  const groupColumn = parsed.groupBy;
+  const selectGroup = groupColumn ? groupColumn : 'NULL';
+  const groupByClause = groupColumn
+    ? `GROUP BY bucket_start_agg, ${groupColumn}`
+    : `GROUP BY bucket_start_agg`;
+  const orderByClause = groupColumn
+    ? `ORDER BY bucket_start_agg ASC, ${groupColumn} ASC`
+    : `ORDER BY bucket_start_agg ASC`;
+
+  const sql = `
+    SELECT
+      ${bucketExpr} AS bucket_start_agg,
+      ${selectGroup} AS group_value,
+      SUM(count) AS count
+    FROM logs_rollup_minute
+    ${whereClause}
+    ${groupByClause}
+    ${orderByClause}
+  `;
+
+  const result = await pool.query(sql, values);
+
+  const buckets: AggregateBucket[] = result.rows.map((row) => ({
+    start: row.bucket_start_agg.toISOString(),
+    group: row.group_value,
+    count: Number(row.count),
+  }));
+
+  return { buckets };
+}
+
+async function queryAggregateRaw(parsed: ParsedAggregateQuery): Promise<AggregateResult> {
   const conditions: string[] = [];
   const values: unknown[] = [];
 
@@ -145,7 +212,7 @@ export async function queryAggregate(parsed: ParsedAggregateQuery): Promise<Aggr
 
   const bucketExpr = `to_timestamp(floor(extract(epoch from timestamp) / ${bucketSecParam}) * ${bucketSecParam})`;
 
-  const groupColumn = parsed.groupBy; // 'service' أو 'level' أو undefined
+  const groupColumn = parsed.groupBy;
   const selectGroup = groupColumn ? groupColumn : 'NULL';
   const groupByClause = groupColumn
     ? `GROUP BY bucket_start, ${groupColumn}`
